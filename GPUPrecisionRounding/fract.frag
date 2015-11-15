@@ -15,7 +15,9 @@ void main(void) {
     color = color + TexCoordOut.y / 255.0;
     
     // uncomment the following line for correct rounding on A7 GPUs
-    // color = (color * 255.0 + 0.5) / 256.0;
+//    color = (color * 255.0 + 0.5) / 256.0;
+    
+    color = floor(color * 2048.0 + 0.5) / 2048.0;
     
     gl_FragColor = (1.0 - u_Threshold) * color + u_Threshold * vec4(threshold, threshold, threshold, 1.0);
 }

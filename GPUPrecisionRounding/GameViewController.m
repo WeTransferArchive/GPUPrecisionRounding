@@ -1,7 +1,52 @@
-#import "OpenGLView.h"
-#import <GLKit/GLKit.h>
+//
+//  GameViewController.m
+//  GPUPrecisionRounding
+//
+//  Created by Denis Kovacs on 11/15/15.
+//  Copyright © 2015 Denis Kovacs. All rights reserved.
+//
 
-@implementation OpenGLView
+#import "GameViewController.h"
+#import <OpenGLES/ES2/glext.h>
+
+@interface GameViewController () {
+    UIApplication *app;
+    CAEAGLLayer* _eaglLayer;
+    EAGLContext* _context;
+    GLuint _colorRenderBuffer;
+    GLuint _positionSlot;
+    GLuint _colorSlot;
+    GLuint _projectionUniform;
+    GLuint _modelViewUniform;
+    float  _currentRotation;
+    GLuint _depthRenderBuffer;
+    
+    GLint _mainFbo;
+    GLint _fbo0, _fbo1, _outputFbo;
+    
+    BOOL shouldDrawToFbo0;
+    BOOL _firstFrame;
+    BOOL _storeToPhotos;
+    
+    GLuint _fboTexture0, _fboTexture1, _outputTexture, _colorTexture;
+    GLuint _texCoordSlot;
+    GLuint _textureUniform;
+    GLuint _vertexBuffer;
+    GLuint _indexBuffer;
+    GLuint _vertexBuffer2;
+    GLuint _indexBuffer2;
+    GLuint _idleFrames;
+    GLuint _totalFrames;
+    
+    GLuint _blitShader;
+    GLuint _fractShader;
+}
+@property (strong, nonatomic) EAGLContext *context;
+@property (weak, nonatomic) GLKView *glkView;
+
+@end
+
+@implementation GameViewController
 
 const int nIdleFrames = 1;
 const int nTotalFrames = 1;
@@ -38,44 +83,16 @@ const GLubyte Indices[] = {
     2, 3, 0,
 };
 
-+ (Class)layerClass {
-    return [CAEAGLLayer class];
-}
-
-- (void)setupLayer {
-    _eaglLayer = (CAEAGLLayer*) self.layer;
-    _eaglLayer.opaque = YES;
-}
-
-- (void)setupContext {   
-    _context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
-    
-    if (!_context) {
-        NSLog(@"Failed to initialize OpenGLES 2.0 context");
-        exit(1);
-    }
-    
-    if (![EAGLContext setCurrentContext:_context]) {
-        NSLog(@"Failed to set current OpenGL context");
-        exit(1);
-    }
-}
-
-- (void)setupDisplayLink {
-    CADisplayLink* displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(render:)];
-    [displayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-}
-
 - (void)setupRenderBuffer {
     glGenRenderbuffers(1, &_colorRenderBuffer);
-    glBindRenderbuffer(GL_RENDERBUFFER, _colorRenderBuffer);        
+    glBindRenderbuffer(GL_RENDERBUFFER, _colorRenderBuffer);
     [_context renderbufferStorage:GL_RENDERBUFFER fromDrawable:_eaglLayer];
 }
 
 - (GLuint) setupFrameBuffer {
     GLuint framebuffer;
     glGenFramebuffers(1, &framebuffer);
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);   
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, _colorRenderBuffer);
     
     return framebuffer;
@@ -95,7 +112,7 @@ const GLubyte Indices[] = {
         default:
             break;
     }
-
+    
     NSError* error;
     NSString* shaderString = [NSString stringWithContentsOfFile:shaderPath encoding:NSUTF8StringEncoding error:&error];
     if (!shaderString) {
@@ -147,7 +164,7 @@ const GLubyte Indices[] = {
     glUseProgram(programHandle);
     
     uniforms[UNIFORM_OFFSET] = glGetUniformLocation(programHandle, "u_Offset");
-
+    
     return programHandle;
 }
 
@@ -167,8 +184,8 @@ const GLubyte Indices[] = {
 {
     GLint backingWidth1, backingHeight1;
     
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_WIDTH_OES, &backingWidth1);
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_HEIGHT_OES, &backingHeight1);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &backingWidth1);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &backingHeight1);
     
     NSInteger x = 0, y = 0, width = backingWidth1, height = backingHeight1;
     NSInteger dataLength = width * height * 4;
@@ -184,7 +201,7 @@ const GLubyte Indices[] = {
     
     NSInteger widthInPoints, heightInPoints;
     if (NULL != UIGraphicsBeginImageContextWithOptions) {
-        CGFloat scale = self.contentScaleFactor;
+        CGFloat scale = self.view.contentScaleFactor;
         widthInPoints = width / scale;
         heightInPoints = height / scale;
         UIGraphicsBeginImageContextWithOptions(CGSizeMake(widthInPoints, heightInPoints), NO, scale);
@@ -216,7 +233,7 @@ const GLubyte Indices[] = {
 -(void) storeToPhotoAlbumWithFbo: (GLuint)fbo
 {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-
+    
     UIImage *img = [self snapshot];
     
     NSData* imdata =  UIImagePNGRepresentation ( img ); // get PNG representation
@@ -240,11 +257,11 @@ const GLubyte Indices[] = {
     glActiveTexture(GL_TEXTURE0);
     
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        
+    
     glDisable(GL_BLEND);
     
     glDisable(GL_DEPTH_TEST);
-        
+    
     glBindTexture(GL_TEXTURE_2D, texture);
     
     glUniform1i(_textureUniform, 0);
@@ -285,26 +302,6 @@ const GLubyte Indices[] = {
 
 
 
-- (void)render:(CADisplayLink*)displayLink {
-    
-    glViewport(0, 0, self.contentScaleFactor * self.frame.size.width, self.contentScaleFactor * self.frame.size.height);
-    
-    if (_firstFrame)
-    {
-        [self fractBlitFromTexture:_colorTexture toFbo:_outputFbo withThreshold:0.0f];
-        
-        [self fractBlitFromTexture:_colorTexture toFbo:_outputFbo withThreshold:1.0f];
-        [self storeToPhotoAlbumWithFbo:_outputFbo];
-
-        [self blitFromTexture:_outputTexture toFbo:_mainFbo];
-
-        
-        _firstFrame = false;
-    }
-    
-    [_context presentRenderbuffer:GL_RENDERBUFFER];
-}
-
 - (GLuint)loadTexture:(NSString *)fileName
 {
     NSDictionary* options = [NSDictionary dictionaryWithObjectsAndKeys:
@@ -324,7 +321,7 @@ const GLubyte Indices[] = {
     
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TEXTURE_FILTER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, TEXTURE_FILTER);
-
+    
     return texture.name;
 }
 
@@ -333,11 +330,6 @@ const GLubyte Indices[] = {
     GLuint framebuffer;
     glGenFramebuffers(1, &framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    
-    GLint width;
-    GLint height;
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_WIDTH_OES, &width);
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_HEIGHT_OES, &height);
     
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     
@@ -350,10 +342,8 @@ const GLubyte Indices[] = {
 
 - (GLuint) createTexture8
 {
-    GLint width;
-    GLint height;
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_WIDTH_OES, &width);
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_HEIGHT_OES, &height);
+    GLint width = self.glkView.drawableWidth;
+    GLint height = self.glkView.drawableHeight;
     
     GLuint texture;
     glGenTextures(1, &texture);
@@ -367,40 +357,132 @@ const GLubyte Indices[] = {
     return texture;
 }
 
-- (id)initWithFrame:(CGRect)frame withScaleFactor:(CGFloat)scale
+- (GLuint) createTexture16
 {
-    self = [super initWithFrame:frame];
-    if (self) {
-        self.contentScaleFactor = scale;
-        
-        [self setupLayer];
-        [self setupContext];
-        [self setupRenderBuffer];
-        _mainFbo = [self setupFrameBuffer];
-        _blitShader = [self compileShadersWithName:@"blit"];
-        _fractShader = [self compileShadersWithName:@"fract"];
-        
-        [self setupVBOs];
-        [self setupDisplayLink];
-        
-        
-        _colorTexture = [self loadTexture:filename];
-        
-        _outputTexture = [self createTexture8];
-        _outputFbo = [self createFramebufferWithTexture:_outputTexture];
+    GLint width = self.glkView.drawableWidth;
+    GLint height = self.glkView.drawableHeight;
+    
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TEXTURE_FILTER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, TEXTURE_FILTER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,  width, height, 0, GL_RGBA, GL_HALF_FLOAT_OES, NULL);
+    
+    return texture;
+}
+
+- (void)viewDidLoad
+{
+    [super viewDidLoad];
+    
+    self.context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
+    self.glkView = (GLKView *) self.view;
+
+    if (!self.context) {
+        NSLog(@"Failed to create ES context");
     }
     
-    _idleFrames=nIdleFrames;
-    _totalFrames=0;
+    GLKView *view = (GLKView *)self.view;
+    view.context = self.context;
+    view.drawableDepthFormat = GLKViewDrawableDepthFormat24;
+    
     _firstFrame = TRUE;
-    return self;
 }
 
 - (void)dealloc
+{    
+    [self tearDownGL];
+    
+    if ([EAGLContext currentContext] == self.context) {
+        [EAGLContext setCurrentContext:nil];
+    }
+}
+
+- (void)didReceiveMemoryWarning
 {
-    [_context release];
-    _context = nil;
-    [super dealloc];
+    [super didReceiveMemoryWarning];
+
+    if ([self isViewLoaded] && ([[self view] window] == nil)) {
+        self.view = nil;
+        
+        [self tearDownGL];
+        
+        if ([EAGLContext currentContext] == self.context) {
+            [EAGLContext setCurrentContext:nil];
+        }
+        self.context = nil;
+    }
+
+    // Dispose of any resources that can be recreated.
+}
+
+- (BOOL)prefersStatusBarHidden {
+    return YES;
+}
+
+- (void)setupGL
+{
+    [EAGLContext setCurrentContext:self.context];
+    
+//    [self setupRenderBuffer];
+//    _mainFbo = [self setupFrameBuffer];
+    
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &_mainFbo);
+    _blitShader = [self compileShadersWithName:@"blit"];
+    _fractShader = [self compileShadersWithName:@"fract"];
+    
+    [self setupVBOs];
+    
+    _colorTexture = [self loadTexture:filename];
+    
+    _outputTexture = [self createTexture16];
+    _outputFbo = [self createFramebufferWithTexture:_outputTexture];
+    
+    _idleFrames=nIdleFrames;
+    _totalFrames=0;
+}
+
+- (void)tearDownGL
+{
+    [EAGLContext setCurrentContext:self.context];
+    
+}
+
+#pragma mark - GLKView and GLKViewController delegate methods
+
+- (void)update
+{
+}
+
+- (void)glkView:(GLKView *)view drawInRect:(CGRect)rect
+{
+    glViewport(0, 0, self.glkView.drawableWidth, self.glkView.drawableHeight);
+    
+    if (_firstFrame)
+    {
+        [self setupGL];
+        
+        [self fractBlitFromTexture:_colorTexture toFbo:_outputFbo withThreshold:0.0f];
+        
+        [self fractBlitFromTexture:_colorTexture toFbo:_outputFbo withThreshold:1.0f];
+
+        glBindFramebuffer(GL_FRAMEBUFFER, _mainFbo);
+        glClearColor(0.0, 0.0, 0.0, 1.0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        [self blitFromTexture:_outputTexture toFbo:_mainFbo];
+        
+        glFinish();
+        
+        [self storeToPhotoAlbumWithFbo:_mainFbo];
+        _firstFrame = false;
+    }
+    
+    [_context presentRenderbuffer:GL_RENDERBUFFER];
 }
 
 @end
